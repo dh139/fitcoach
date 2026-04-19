@@ -70,11 +70,11 @@ app.listen(PORT, async () => {
   startDecayJob();
   startLeaderboardJob();
 
-  // Seed exercises if database is empty
+  // Seed exercises if database is empty or only has mock data
   try {
     const count = await Exercise.countDocuments();
-    if (count === 0) {
-      console.log('No exercises found in DB. Running syncFromAPI...');
+    if (count <= 10) {
+      console.log(`Only ${count} exercises found in DB. Running syncFromAPI to load full dataset...`);
       syncFromAPI();
     }
   } catch (err) {
