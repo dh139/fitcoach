@@ -5,6 +5,8 @@ const connectDB = require('./config/db');
 const { applySecurityMiddleware, apiLimiter, authLimiter, aiLimiter } = require('./middleware/security');
 const { startDecayJob }       = require('./jobs/xpDecayJob');
 const { startLeaderboardJob } = require('./jobs/leaderboardJob');
+const { syncFromAPI }         = require('./services/exerciseService');
+const Exercise                = require('./models/Exercise');
 
 const app = express();
 
@@ -63,8 +65,19 @@ app.use((req, res) => res.status(404).json({ success: false, message: 'Route not
 
 // ── Start server + jobs ───────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`\n🚀 Server running on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
   startDecayJob();
   startLeaderboardJob();
+
+  // Seed exercises if database is empty
+  try {
+    const count = await Exercise.countDocuments();
+    if (count === 0) {
+      console.log('No exercises found in DB. Running syncFromAPI...');
+      syncFromAPI();
+    }
+  } catch (err) {
+    console.error('Failed to check exercise count on startup:', err);
+  }
 });
