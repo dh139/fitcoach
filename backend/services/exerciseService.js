@@ -34,72 +34,44 @@ const mapExercise = (ex) => {
   };
 };
 
-// Fetch all exercises by paginating through the API
+// Fetch all exercises from local JSON dump since exercisedb.dev is offline
 const syncFromAPI = async () => {
-  console.log('Starting exercise sync from exercisedb.dev (no API key required)...');
+  console.log('Starting exercise sync from local exercises_dump.json...');
 
   try {
-    // Step 1: get first page to find total
-    const first = await axios.get(`${BASE_URL}/exercises`, {
-      params: { limit: BATCH_SIZE, offset: 0 },
-      timeout: 15000,
-    });
+    const fs = require('fs');
+    const path = require('path');
+    const dropPath = path.join(__dirname, '../exercises_dump.json');
 
-    const { totalExercises, totalPages } = first.data.metadata;
-    console.log(`Total exercises available: ${totalExercises} across ${totalPages} pages`);
-
-    let allExercises = [...first.data.data];
-
-    // Step 2: fetch remaining pages in parallel (max 5 at a time to be polite)
-    const pageNumbers = [];
-    for (let page = 2; page <= Math.min(totalPages, 60); page++) {
-      pageNumbers.push(page);
+    if (!fs.existsSync(dropPath)) {
+      console.log('No exercises_dump.json found. Skipping sync.');
+      await seedFromFallback();
+      return;
     }
 
-    // Process in chunks of 5 concurrent requests
-    const CONCURRENT = 5;
-    for (let i = 0; i < pageNumbers.length; i += CONCURRENT) {
-      const chunk = pageNumbers.slice(i, i + CONCURRENT);
-      const results = await Promise.allSettled(
-        chunk.map((page) =>
-          axios.get(`${BASE_URL}/exercises`, {
-            params: { limit: BATCH_SIZE, offset: (page - 1) * BATCH_SIZE },
-            timeout: 15000,
-          })
-        )
-      );
+    const allExercises = JSON.parse(fs.readFileSync(dropPath, 'utf8'));
+    console.log(`Read ${allExercises.length} exercises from JSON dump — saving to MongoDB...`);
 
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          allExercises.push(...result.value.data.data);
-        }
-      }
-
-      // Small delay between chunks to avoid rate limiting
-      if (i + CONCURRENT < pageNumbers.length) {
-        await new Promise((r) => setTimeout(r, 300));
-      }
-    }
-
-    console.log(`Fetched ${allExercises.length} exercises total — saving to MongoDB...`);
-
-    // Step 3: upsert all into MongoDB
+    // Upsert all into MongoDB
     const ops = allExercises
       .filter((ex) => ex.exerciseId)
-      .map((ex) => ({
-        updateOne: {
-          filter: { exerciseId: ex.exerciseId },
-          update: { $set: mapExercise(ex) },
-          upsert: true,
-        },
-      }));
+      .map((ex) => {
+        const { _id, ...cleanEx } = ex; // remove local mongo ID
+        return {
+          updateOne: {
+            filter: { exerciseId: cleanEx.exerciseId },
+            update: { $set: cleanEx },
+            upsert: true,
+          },
+        };
+      });
 
     if (ops.length > 0) {
       const result = await Exercise.bulkWrite(ops, { ordered: false });
-      console.log(`Sync complete: ${result.upsertedCount} inserted, ${result.modifiedCount} updated`);
+      console.log(`Sync complete: ${result.upsertedCount || 0} inserted, ${result.modifiedCount || 0} updated`);
     }
   } catch (err) {
-    console.error('exercisedb.dev sync failed:', err.message);
+    console.error('Local JSON sync failed:', err.message);
     console.log('Falling back to seed data...');
     await seedFromFallback();
   }
